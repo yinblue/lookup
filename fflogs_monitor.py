@@ -181,6 +181,42 @@ query ($code: String!) {
 """
 
 
+def init_cold_start(monitor):
+    """服務剛啟動時，先默默將現有的舊 Log 寫入已知清單，不發送通知"""
+    print(
+        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 進行冷啟動初始化：載入現有歷史 Log..."
+    )
+    count = 0
+    for char in TARGET_CHARACTERS:
+        res = monitor.graphql(
+            QUERY_RECENT_REPORTS,
+            {
+                "name": char["name"],
+                "serverRegion": char["region"],
+                "serverSlug": char["server"],
+            },
+        )
+
+        if not res or "data" not in res:
+            continue
+
+        character_obj = res["data"].get("characterData", {}).get("character")
+        if not character_obj:
+            continue
+
+        reports = character_obj.get("recentReports", {}).get("data", []) or []
+        for r in reports:
+            code = r["code"]
+            if code not in monitor.seen_reports:
+                monitor.seen_reports.add(code)
+                count += 1
+
+    monitor.save_seen_reports()
+    print(
+        f"✅ 冷啟動完成！已將 {count} 份現有 Log 預先標記為已讀，防止重複洗版通知。\n"
+    )
+
+
 def check_updates(monitor):
     print(
         f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 掃描新 Log 中..."
@@ -261,6 +297,9 @@ def main():
     print(" FF Logs 常駐監控服務已於 Render 啟動")
     print(f" 監控角色: {char_list}")
     print("============================================")
+
+    # 執行冷啟動預載
+    init_cold_start(monitor)
 
     while True:
         try:
