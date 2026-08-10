@@ -14,9 +14,11 @@ CLIENT_ID = os.environ.get("CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("CLIENT_SECRET", "")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
-# 僅監控 Puyeee Afrie
+# 監控角色清單
 TARGET_CHARACTERS = [
     {"name": "Puyeee Afrie", "server": "Bahamut", "region": "JP"},
+    {"name": "Orca Delphinidae", "server": "Bahamut", "region": "JP"},
+    {"name": "Oha Epocan", "server": "Atomos", "region": "JP"},
 ]
 
 CHECK_INTERVAL_SECONDS = 300
@@ -40,7 +42,7 @@ def run_dummy_server():
             self.wfile.write(b"FF Logs Monitor is Running!")
 
         def log_message(self, format, *args):
-            return  # 關閉請求日誌
+            return
 
     with socketserver.TCPServer(("", port), SimpleHandler) as httpd:
         print(f"Dummy HTTP Server listening on port {port}")
@@ -255,7 +257,10 @@ def main():
 
     monitor = FFLogsMonitor()
     print("============================================")
-    print(" FF Logs 常駐監控服務已於 Render 啟動 (僅監控 Puyeee Afrie)")
+    print(" FF Logs 常駐監控服務已於 Render 啟動")
+    print(
+        f" 監控角色: {[f\"{c['name']} ({c['server']})\" for c in TARGET_CHARACTERS]}"
+    )
     print("============================================")
 
     while True:
