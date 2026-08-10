@@ -21,6 +21,9 @@ TARGET_CHARACTERS = [
     {"name": "Oha Epocan", "server": "Atomos", "region": "JP"},
 ]
 
+# ⚡【手動補發區】已填入需要補發通知的 Log Code
+FORCE_CODES = ["Rq9VZJnBWjGbmMtw"]
+
 CHECK_INTERVAL_SECONDS = 300
 SEEN_REPORTS_FILE = "seen_reports.json"
 API_URL = "https://www.fflogs.com/api/v2/client"
@@ -181,8 +184,38 @@ query ($code: String!) {
 """
 
 
+def check_forced_reports(monitor):
+    """手動補發指定 Code 的 Log 通知"""
+    if not FORCE_CODES:
+        return
+
+    print(f"\n⚡ 偵測到手動補發清單，準備發送通知...")
+    for code in FORCE_CODES:
+        details = monitor.graphql(QUERY_REPORT_DETAILS, {"code": code})
+        report_data = (
+            details.get("data", {}).get("reportData", {}).get("report")
+            if details
+            else None
+        )
+
+        if report_data:
+            fights = report_data.get("fights", []) or []
+            title = report_data.get("title", "無標題")
+            uploader = report_data.get("owner", {}).get("name", "未知")
+
+            report_url = f"https://www.fflogs.com/reports/{code}"
+            msg = f"**【手動補發通知】**\n**上傳者:** {uploader}\n**包含 Pull 數:** {len(fights)}"
+            monitor.send_discord_notify(
+                f"📊 補發 Log 通知：{title}", msg, report_url
+            )
+            print(f"✅ 已成功補發 Code: {code} ({title}) 的 Discord 通知！")
+
+            monitor.seen_reports.add(code)
+            monitor.save_seen_reports()
+
+
 def init_cold_start(monitor):
-    """服務剛啟動時，先默默將現有的舊 Log 寫入已知清單，不發送通知"""
+    """冷啟動載入現有歷史 Log"""
     print(
         f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 進行冷啟動初始化：載入現有歷史 Log..."
     )
@@ -207,6 +240,8 @@ def init_cold_start(monitor):
         reports = character_obj.get("recentReports", {}).get("data", []) or []
         for r in reports:
             code = r["code"]
+            if code in FORCE_CODES:
+                continue
             if code not in monitor.seen_reports:
                 monitor.seen_reports.add(code)
                 count += 1
@@ -263,18 +298,6 @@ def check_updates(monitor):
                     title = report_data.get("title", "無標題")
                     uploader = report_data.get("owner", {}).get("name", "未知")
 
-                    print(
-                        f" -> 標題: {title} | 上傳者: {uploader} | 包含 {len(fights)} 個 Pulls"
-                    )
-
-                    for f in fights:
-                        duration_sec = round(
-                            (f["endTime"] - f["startTime"]) / 1000, 1
-                        )
-                        print(
-                            f"    [Fight {f['id']}] {f['name']} - 時長: {duration_sec}s | 血量: {f.get('bossPercentage')}%"
-                        )
-
                     report_url = f"https://www.fflogs.com/reports/{code}"
                     msg = f"**角色:** {char['name']}\n**上傳者:** {uploader}\n**包含 Pull 數:** {len(fights)}"
                     monitor.send_discord_notify(
@@ -298,7 +321,10 @@ def main():
     print(f" 監控角色: {char_list}")
     print("============================================")
 
-    # 執行冷啟動預載
+    # 1. 優先執行手動補發
+    check_forced_reports(monitor)
+
+    # 2. 執行冷啟動預載
     init_cold_start(monitor)
 
     while True:
