@@ -256,11 +256,10 @@ def main():
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     monitor = FFLogsMonitor()
+    char_list = [f"{c['name']} ({c['server']})" for c in TARGET_CHARACTERS]
     print("============================================")
     print(" FF Logs 常駐監控服務已於 Render 啟動")
-    print(
-        f" 監控角色: {[f\"{c['name']} ({c['server']})\" for c in TARGET_CHARACTERS]}"
-    )
+    print(f" 監控角色: {char_list}")
     print("============================================")
 
     while True:
