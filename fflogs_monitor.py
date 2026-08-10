@@ -14,10 +14,9 @@ CLIENT_ID = os.environ.get("CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("CLIENT_SECRET", "")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
+# 僅監控 Puyeee Afrie
 TARGET_CHARACTERS = [
     {"name": "Puyeee Afrie", "server": "Bahamut", "region": "JP"},
-    {"name": "Orca Delphinidae", "server": "Bahamut", "region": "JP"},
-    {"name": "Shalem Silveria", "server": "Bahamut", "region": "JP"},
 ]
 
 CHECK_INTERVAL_SECONDS = 300
@@ -256,7 +255,7 @@ def main():
 
     monitor = FFLogsMonitor()
     print("============================================")
-    print(" FF Logs 常駐監控服務已於 Render 啟動")
+    print(" FF Logs 常駐監控服務已於 Render 啟動 (僅監控 Puyeee Afrie)")
     print("============================================")
 
     while True:
