@@ -22,7 +22,7 @@ TARGET_CHARACTERS = [
 ]
 
 # ⚡【手動補發區】已填入需要補發通知的 Log Code
-FORCE_CODES = ["Rq9VZJnBWjGbmMtw"]
+FORCE_CODES = []
 
 CHECK_INTERVAL_SECONDS = 300
 SEEN_REPORTS_FILE = "seen_reports.json"
