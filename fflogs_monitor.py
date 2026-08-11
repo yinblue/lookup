@@ -20,9 +20,10 @@ TARGET_CHARACTERS = [
     {"name": "Orca Delphinidae", "server": "Bahamut", "region": "JP"},
     {"name": "Oha Epocan", "server": "Atomos", "region": "JP"},
     {"name": "Ayase Yuina", "server": "Typhon", "region": "JP"},
+
 ]
 
-# ⚡【手動補發區】已填入需要補發通知的 Log Code
+# ⚡【手動補發區】
 FORCE_CODES = []
 
 CHECK_INTERVAL_SECONDS = 300
@@ -30,9 +31,12 @@ SEEN_REPORTS_FILE = "seen_reports.json"
 API_URL = "https://www.fflogs.com/api/v2/client"
 TOKEN_URL = "https://www.fflogs.com/oauth/token"
 
+# 全域 Monitor 實例（提供 HTTP 服務查詢）
+global_monitor = None
+
 
 # ============================================================
-# 防 Render 免費層休眠的微型 HTTP 服務 (Dummy Server)
+# 防 Render 免費層休眠 + 查詢已讀清單的微型 HTTP 服務
 # ============================================================
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
@@ -40,10 +44,33 @@ def run_dummy_server():
     class SimpleHandler(http.server.SimpleHTTPRequestHandler):
 
         def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"FF Logs Monitor is Running!")
+            # 存取 /seen 即可查看所有已被標記為已讀的 Log Code
+            if self.path == "/seen":
+                self.send_response(200)
+                self.send_header(
+                    "Content-type", "application/json; charset=utf-8"
+                )
+                self.end_headers()
+
+                seen_list = (
+                    list(global_monitor.seen_reports) if global_monitor else []
+                )
+                response_data = {
+                    "total_count": len(seen_list),
+                    "seen_codes": seen_list,
+                }
+                self.wfile.write(
+                    json.dumps(response_data, indent=2, ensure_ascii=False).encode(
+                        "utf-8"
+                    )
+                )
+            else:
+                self.send_response(200)
+                self.send_header("Content-type", "text/plain")
+                self.end_headers()
+                self.wfile.write(
+                    b"FF Logs Monitor is Running! Visit /seen to check recorded log codes."
+                )
 
         def log_message(self, format, *args):
             return
@@ -186,7 +213,6 @@ query ($code: String!) {
 
 
 def check_forced_reports(monitor):
-    """手動補發指定 Code 的 Log 通知"""
     if not FORCE_CODES:
         return
 
@@ -216,7 +242,6 @@ def check_forced_reports(monitor):
 
 
 def init_cold_start(monitor):
-    """冷啟動載入現有歷史 Log"""
     print(
         f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 進行冷啟動初始化：載入現有歷史 Log..."
     )
@@ -255,7 +280,7 @@ def init_cold_start(monitor):
 
 def check_updates(monitor):
     print(
-        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 掃描新 Log 中..."
+        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 掃描新 Log 中... (當前已讀筆數: {len(monitor.seen_reports)})"
     )
 
     for char in TARGET_CHARACTERS:
@@ -313,19 +338,20 @@ def check_updates(monitor):
 # 4. 常駐腳本入口
 # ============================================================
 def main():
+    global global_monitor
+
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     monitor = FFLogsMonitor()
+    global_monitor = monitor
+
     char_list = [f"{c['name']} ({c['server']})" for c in TARGET_CHARACTERS]
     print("============================================")
     print(" FF Logs 常駐監控服務已於 Render 啟動")
     print(f" 監控角色: {char_list}")
     print("============================================")
 
-    # 1. 優先執行手動補發
     check_forced_reports(monitor)
-
-    # 2. 執行冷啟動預載
     init_cold_start(monitor)
 
     while True:
