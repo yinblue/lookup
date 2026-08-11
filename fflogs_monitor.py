@@ -4,7 +4,7 @@ import os
 import socketserver
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import requests
 
 # ============================================================
@@ -35,6 +35,15 @@ TOKEN_URL = "https://www.fflogs.com/oauth/token"
 global_monitor = None
 
 
+def format_timestamp(ts_ms):
+    """將毫秒時間戳記轉換為台灣時間格式 (YYYY-MM-DD HH:MM)"""
+    if not ts_ms:
+        return "未知"
+    tz_tw = timezone(timedelta(hours=8))
+    dt = datetime.fromtimestamp(ts_ms / 1000, tz=tz_tw)
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
 # ============================================================
 # 防 Render 免費層休眠 + 查詢已讀清單的微型 HTTP 服務
 # ============================================================
@@ -44,7 +53,6 @@ def run_dummy_server():
     class SimpleHandler(http.server.SimpleHTTPRequestHandler):
 
         def do_GET(self):
-            # 存取 /seen 即可查看所有已被標記為已讀的 Log Code
             if self.path == "/seen":
                 self.send_response(200)
                 self.send_header(
@@ -195,6 +203,7 @@ query ($code: String!) {
         report(code: $code) {
             code
             title
+            startTime
             owner { name }
             fights {
                 id
@@ -229,9 +238,10 @@ def check_forced_reports(monitor):
             fights = report_data.get("fights", []) or []
             title = report_data.get("title", "無標題")
             uploader = report_data.get("owner", {}).get("name", "未知")
+            upload_time = format_timestamp(report_data.get("startTime"))
 
             report_url = f"https://www.fflogs.com/reports/{code}"
-            msg = f"**【手動補發通知】**\n**上傳者:** {uploader}\n**包含 Pull 數:** {len(fights)}"
+            msg = f"**【手動補發通知】**\n**上傳者:** {uploader}\n**記錄時間:** {upload_time}\n**包含 Pull 數:** {len(fights)}"
             monitor.send_discord_notify(
                 f"📊 補發 Log 通知：{title}", msg, report_url
             )
@@ -323,9 +333,15 @@ def check_updates(monitor):
                     fights = report_data.get("fights", []) or []
                     title = report_data.get("title", "無標題")
                     uploader = report_data.get("owner", {}).get("name", "未知")
+                    upload_time = format_timestamp(report_data.get("startTime"))
 
                     report_url = f"https://www.fflogs.com/reports/{code}"
-                    msg = f"**角色:** {char['name']}\n**上傳者:** {uploader}\n**包含 Pull 數:** {len(fights)}"
+                    msg = (
+                        f"**角色:** {char['name']}\n"
+                        f"**上傳者:** {uploader}\n"
+                        f"**記錄時間:** {upload_time}\n"
+                        f"**包含 Pull 數:** {len(fights)}"
+                    )
                     monitor.send_discord_notify(
                         f"📊 偵測到新 Log 上傳：{title}", msg, report_url
                     )
@@ -352,7 +368,7 @@ def main():
     print("============================================")
 
     check_forced_reports(monitor)
-    #init_cold_start(monitor)
+    init_cold_start(monitor)
 
     while True:
         try:
