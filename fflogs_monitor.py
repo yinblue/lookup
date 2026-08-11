@@ -20,7 +20,7 @@ TARGET_CHARACTERS = [
     {"name": "Orca Delphinidae", "server": "Bahamut", "region": "JP"},
     {"name": "Oha Epocan", "server": "Atomos", "region": "JP"},
     {"name": "Ayase Yuina", "server": "Typhon", "region": "JP"},
-
+    {"name": "Winny Wan", "server": "Titan", "region": "JP"},
 ]
 
 # ⚡【手動補發區】
