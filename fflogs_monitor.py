@@ -19,6 +19,7 @@ TARGET_CHARACTERS = [
     {"name": "Puyeee Afrie", "server": "Bahamut", "region": "JP"},
     {"name": "Orca Delphinidae", "server": "Bahamut", "region": "JP"},
     {"name": "Oha Epocan", "server": "Atomos", "region": "JP"},
+    {"name": "Ayase Yuina", "server": "Typhon", "region": "JP"},
 ]
 
 # ⚡【手動補發區】已填入需要補發通知的 Log Code
