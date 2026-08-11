@@ -368,7 +368,7 @@ def main():
     print("============================================")
 
     check_forced_reports(monitor)
-    #init_cold_start(monitor)
+    init_cold_start(monitor)
 
     while True:
         try:
