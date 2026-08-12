@@ -8,20 +8,27 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 # ============================================================
-# 1. 從環境變數讀取機密資訊 (在 Render 後台設定)
+# 1. 從環境變數讀取機密資訊與角色清單 (在 Render 後台設定)
 # ============================================================
 CLIENT_ID = os.environ.get("CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("CLIENT_SECRET", "")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
-# 監控角色清單
-TARGET_CHARACTERS = [
-    {"name": "Puyeee Afrie", "server": "Bahamut", "region": "JP"},
-    {"name": "Orca Delphinidae", "server": "Bahamut", "region": "JP"},
-    {"name": "Oha Epocan", "server": "Atomos", "region": "JP"},
-    {"name": "Ayase Yuina", "server": "Typhon", "region": "JP"},
-    {"name": "Winny Wan", "server": "Titan", "region": "JP"},
+# 預設角色清單 (若 Render 未設定環境變數時使用)
+DEFAULT_CHARACTERS = [
+
 ]
+
+# 優先讀取 Render 環境變數中的 TARGET_CHARACTERS
+env_target_chars = os.environ.get("TARGET_CHARACTERS", "")
+if env_target_chars:
+    try:
+        TARGET_CHARACTERS = json.loads(env_target_chars)
+    except Exception as e:
+        print(f"⚠️ 解析 Render 環境變數 TARGET_CHARACTERS 失敗，改用程式內預設值: {e}")
+        TARGET_CHARACTERS = DEFAULT_CHARACTERS
+else:
+    TARGET_CHARACTERS = DEFAULT_CHARACTERS
 
 # ⚡【手動補發區】
 FORCE_CODES = []
@@ -364,7 +371,7 @@ def main():
     char_list = [f"{c['name']} ({c['server']})" for c in TARGET_CHARACTERS]
     print("============================================")
     print(" FF Logs 常駐監控服務已於 Render 啟動")
-    print(f" 監控角色: {char_list}")
+    print(f" 監控角色 ({len(TARGET_CHARACTERS)} 位): {char_list}")
     print("============================================")
 
     check_forced_reports(monitor)
