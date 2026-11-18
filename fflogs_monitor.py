@@ -15,9 +15,7 @@ CLIENT_SECRET = os.environ.get("CLIENT_SECRET", "")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 # 預設角色清單 (若 Render 未設定環境變數時使用)
-DEFAULT_CHARACTERS = [
-
-]
+DEFAULT_CHARACTERS = []
 
 # 優先讀取 Render 環境變數中的 TARGET_CHARACTERS
 env_target_chars = os.environ.get("TARGET_CHARACTERS", "")
@@ -34,6 +32,8 @@ else:
 FORCE_CODES = []
 
 CHECK_INTERVAL_SECONDS = 300
+# 冷啟動保護時間（分鐘）：重啟時，此時間內剛開打的 Log 不會被當成舊資料吞掉，會正常發送通知
+COLD_START_IGNORE_MINUTES = 60
 SEEN_REPORTS_FILE = "seen_reports.json"
 API_URL = "https://www.fflogs.com/api/v2/client"
 TOKEN_URL = "https://www.fflogs.com/oauth/token"
@@ -143,10 +143,12 @@ class FFLogsMonitor:
                 if r.status_code == 200:
                     return r.json()
                 elif r.status_code in [429, 500, 502, 503, 504]:
+                    print(f"⚠️ FF Logs API 回傳狀態碼 {r.status_code}，2 秒後重試...")
                     time.sleep(2)
                 else:
                     r.raise_for_status()
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ API 連線異常 ({e})，2 秒後重試...")
                 time.sleep(2)
         return None
 
@@ -232,7 +234,7 @@ def check_forced_reports(monitor):
     if not FORCE_CODES:
         return
 
-    print(f"\n⚡ 偵測到手動補發清單，準備發送通知...")
+    print("\n⚡ 偵測到手動補發清單，準備發送通知...")
     for code in FORCE_CODES:
         details = monitor.graphql(QUERY_REPORT_DETAILS, {"code": code})
         report_data = (
@@ -260,9 +262,12 @@ def check_forced_reports(monitor):
 
 def init_cold_start(monitor):
     print(
-        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 進行冷啟動初始化：載入現有歷史 Log..."
+        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 進行冷啟動初始化：載入超過 {COLD_START_IGNORE_MINUTES} 分鐘前的歷史 Log..."
     )
     count = 0
+    # 計算時間門檻（毫秒）
+    cutoff_ms = (time.time() - COLD_START_IGNORE_MINUTES * 60) * 1000
+
     for char in TARGET_CHARACTERS:
         res = monitor.graphql(
             QUERY_RECENT_REPORTS,
@@ -278,6 +283,7 @@ def init_cold_start(monitor):
 
         character_obj = res["data"].get("characterData", {}).get("character")
         if not character_obj:
+            print(f"⚠️ 冷啟動找不到角色: {char['name']} ({char['server']}-{char['region']})")
             continue
 
         reports = character_obj.get("recentReports", {}).get("data", []) or []
@@ -285,13 +291,17 @@ def init_cold_start(monitor):
             code = r["code"]
             if code in FORCE_CODES:
                 continue
+            # 若為保護時間內剛開打的 Log，不標記為已讀，留給隨後的 check_updates 發送通知
+            if r.get("startTime", 0) > cutoff_ms:
+                print(f"⏳ 發現近期 Log ({code})，保留待通知...")
+                continue
             if code not in monitor.seen_reports:
                 monitor.seen_reports.add(code)
                 count += 1
 
     monitor.save_seen_reports()
     print(
-        f"✅ 冷啟動完成！已將 {count} 份現有 Log 預先標記為已讀，防止重複洗版通知。\n"
+        f"✅ 冷啟動完成！已將 {count} 份舊 Log 預先標記為已讀。\n"
     )
 
 
