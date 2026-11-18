@@ -28,11 +28,15 @@ if env_target_chars:
 else:
     TARGET_CHARACTERS = DEFAULT_CHARACTERS
 
-# ⚡【手動補發區】
+# ⚡【單筆手動補發區】
 FORCE_CODES = []
 
+# 📅【日期區間自動補發區】
+# 設定起始日期（台灣時間），啟動時會自動補發該日期至今的所有 Log。
+# ⚠️ 補發完成後，請務必改回 "" 空字串，避免下次 Render 重啟時重複發送！
+BACKFILL_START_DATE = "2026-10-06"
+
 CHECK_INTERVAL_SECONDS = 300
-# 冷啟動保護時間（分鐘）：重啟時，此時間內剛開打的 Log 不會被當成舊資料吞掉，會正常發送通知
 COLD_START_IGNORE_MINUTES = 60
 SEEN_REPORTS_FILE = "seen_reports.json"
 API_URL = "https://www.fflogs.com/api/v2/client"
@@ -49,6 +53,13 @@ def format_timestamp(ts_ms):
     tz_tw = timezone(timedelta(hours=8))
     dt = datetime.fromtimestamp(ts_ms / 1000, tz=tz_tw)
     return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def parse_date_to_ms(date_str):
+    """將 YYYY-MM-DD 轉換為台灣時間當日 00:00 的毫秒時間戳記"""
+    tz_tw = timezone(timedelta(hours=8))
+    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=tz_tw)
+    return dt.timestamp() * 1000
 
 
 # ============================================================
@@ -180,20 +191,25 @@ class FFLogsMonitor:
             ]
         }
         try:
-            requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+            r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+            if r.status_code == 429:
+                # 若觸發 Discord 速率限制，等待後重試一次
+                retry_after = r.json().get("retry_after", 3)
+                time.sleep(retry_after)
+                requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
         except Exception as e:
             print(f"Discord 通知發送失敗: {e}")
 
 
 # ============================================================
-# 3. 核心監控邏輯
+# 3. 核心監控與補發邏輯
 # ============================================================
 QUERY_RECENT_REPORTS = """
-query ($name: String!, $serverRegion: String!, $serverSlug: String!) {
+query ($name: String!, $serverRegion: String!, $serverSlug: String!, $limit: Int!) {
     characterData {
         character(name: $name, serverRegion: $serverRegion, serverSlug: $serverSlug) {
             name
-            recentReports(limit: 10) {
+            recentReports(limit: $limit) {
                 data {
                     code
                     startTime
@@ -230,34 +246,108 @@ query ($code: String!) {
 """
 
 
+def send_report_embed(monitor, code, char_name, is_backfill=False):
+    """查詢單筆 Report 詳情並發送 Discord 通知"""
+    details = monitor.graphql(QUERY_REPORT_DETAILS, {"code": code})
+    report_data = (
+        details.get("data", {}).get("reportData", {}).get("report")
+        if details
+        else None
+    )
+
+    if report_data:
+        fights = report_data.get("fights", []) or []
+        title = report_data.get("title", "無標題")
+        uploader = report_data.get("owner", {}).get("name", "未知")
+        upload_time = format_timestamp(report_data.get("startTime"))
+
+        report_url = f"https://www.fflogs.com/reports/{code}"
+        prefix = "📊 補發歷史 Log 通知：" if is_backfill else "📊 偵測到新 Log 上傳："
+        msg = (
+            f"**角色:** {char_name}\n"
+            f"**上傳者:** {uploader}\n"
+            f"**記錄時間:** {upload_time}\n"
+            f"**包含 Pull 數:** {len(fights)}"
+        )
+        monitor.send_discord_notify(f"{prefix}{title}", msg, report_url)
+        print(f"✅ 已發送通知: [{upload_time}] {title} ({code})")
+        return True
+    return False
+
+
+def backfill_since_date(monitor):
+    """自動補發 BACKFILL_START_DATE 至今的所有公開 Log"""
+    if not BACKFILL_START_DATE:
+        return
+
+    try:
+        start_ms = parse_date_to_ms(BACKFILL_START_DATE)
+    except ValueError:
+        print(f"❌ BACKFILL_START_DATE 格式錯誤 ({BACKFILL_START_DATE})，請使用 YYYY-MM-DD 格式。")
+        return
+
+    print(f"\n📅 啟動歷史區間補發：搜尋 {BACKFILL_START_DATE} 至今的紀錄...")
+    # 用字典去重：key 為 report code，避免同團多個監控角色重複發送
+    pending_reports = {}
+
+    for char in TARGET_CHARACTERS:
+        res = monitor.graphql(
+            QUERY_RECENT_REPORTS,
+            {
+                "name": char["name"],
+                "serverRegion": char["region"],
+                "serverSlug": char["server"],
+                "limit": 50,
+            },
+        )
+
+        if not res or "data" not in res:
+            continue
+
+        character_obj = res["data"].get("characterData", {}).get("character")
+        if not character_obj:
+            print(f"⚠️ 補發查詢找不到角色: {char['name']} ({char['server']}-{char['region']})")
+            continue
+
+        reports = character_obj.get("recentReports", {}).get("data", []) or []
+        for r in reports:
+            code = r["code"]
+            r_start = r.get("startTime", 0)
+            if r_start >= start_ms and code not in monitor.seen_reports:
+                if code not in pending_reports:
+                    pending_reports[code] = {
+                        "code": code,
+                        "startTime": r_start,
+                        "char_name": char["name"],
+                    }
+
+    # 依照戰鬥時間從舊到新排序後依序補發
+    sorted_reports = sorted(pending_reports.values(), key=lambda x: x["startTime"])
+    print(f"🔍 共找到 {len(sorted_reports)} 份待補發的 Log，開始依序發送...")
+
+    sent_count = 0
+    for item in sorted_reports:
+        code = item["code"]
+        if send_report_embed(monitor, code, item["char_name"], is_backfill=True):
+            sent_count += 1
+        monitor.seen_reports.add(code)
+        monitor.save_seen_reports()
+        # 間隔 1.5 秒避免觸發 Discord Webhook 頻率限制
+        time.sleep(1.5)
+
+    print(f"✅ 歷史區間補發完成！共補發 {sent_count} 份通知。\n")
+
+
 def check_forced_reports(monitor):
     if not FORCE_CODES:
         return
 
     print("\n⚡ 偵測到手動補發清單，準備發送通知...")
     for code in FORCE_CODES:
-        details = monitor.graphql(QUERY_REPORT_DETAILS, {"code": code})
-        report_data = (
-            details.get("data", {}).get("reportData", {}).get("report")
-            if details
-            else None
-        )
-
-        if report_data:
-            fights = report_data.get("fights", []) or []
-            title = report_data.get("title", "無標題")
-            uploader = report_data.get("owner", {}).get("name", "未知")
-            upload_time = format_timestamp(report_data.get("startTime"))
-
-            report_url = f"https://www.fflogs.com/reports/{code}"
-            msg = f"**【手動補發通知】**\n**上傳者:** {uploader}\n**記錄時間:** {upload_time}\n**包含 Pull 數:** {len(fights)}"
-            monitor.send_discord_notify(
-                f"📊 補發 Log 通知：{title}", msg, report_url
-            )
-            print(f"✅ 已成功補發 Code: {code} ({title}) 的 Discord 通知！")
-
-            monitor.seen_reports.add(code)
-            monitor.save_seen_reports()
+        send_report_embed(monitor, code, "手動指定", is_backfill=True)
+        monitor.seen_reports.add(code)
+        monitor.save_seen_reports()
+        time.sleep(1.5)
 
 
 def init_cold_start(monitor):
@@ -265,7 +355,6 @@ def init_cold_start(monitor):
         f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 進行冷啟動初始化：載入超過 {COLD_START_IGNORE_MINUTES} 分鐘前的歷史 Log..."
     )
     count = 0
-    # 計算時間門檻（毫秒）
     cutoff_ms = (time.time() - COLD_START_IGNORE_MINUTES * 60) * 1000
 
     for char in TARGET_CHARACTERS:
@@ -275,6 +364,7 @@ def init_cold_start(monitor):
                 "name": char["name"],
                 "serverRegion": char["region"],
                 "serverSlug": char["server"],
+                "limit": 10,
             },
         )
 
@@ -291,7 +381,6 @@ def init_cold_start(monitor):
             code = r["code"]
             if code in FORCE_CODES:
                 continue
-            # 若為保護時間內剛開打的 Log，不標記為已讀，留給隨後的 check_updates 發送通知
             if r.get("startTime", 0) > cutoff_ms:
                 print(f"⏳ 發現近期 Log ({code})，保留待通知...")
                 continue
@@ -317,6 +406,7 @@ def check_updates(monitor):
                 "name": char["name"],
                 "serverRegion": char["region"],
                 "serverSlug": char["server"],
+                "limit": 10,
             },
         )
 
@@ -336,33 +426,7 @@ def check_updates(monitor):
                 print(
                     f"\n🎉 發現新上傳的 Report! Code: {code} (角色: {char['name']})"
                 )
-
-                details = monitor.graphql(QUERY_REPORT_DETAILS, {"code": code})
-                report_data = (
-                    details.get("data", {})
-                    .get("reportData", {})
-                    .get("report")
-                    if details
-                    else None
-                )
-
-                if report_data:
-                    fights = report_data.get("fights", []) or []
-                    title = report_data.get("title", "無標題")
-                    uploader = report_data.get("owner", {}).get("name", "未知")
-                    upload_time = format_timestamp(report_data.get("startTime"))
-
-                    report_url = f"https://www.fflogs.com/reports/{code}"
-                    msg = (
-                        f"**角色:** {char['name']}\n"
-                        f"**上傳者:** {uploader}\n"
-                        f"**記錄時間:** {upload_time}\n"
-                        f"**包含 Pull 數:** {len(fights)}"
-                    )
-                    monitor.send_discord_notify(
-                        f"📊 偵測到新 Log 上傳：{title}", msg, report_url
-                    )
-
+                send_report_embed(monitor, code, char["name"], is_backfill=False)
                 monitor.seen_reports.add(code)
                 monitor.save_seen_reports()
 
@@ -384,7 +448,11 @@ def main():
     print(f" 監控角色 ({len(TARGET_CHARACTERS)} 位): {char_list}")
     print("============================================")
 
+    # 1. 優先執行日期區間補發（在冷啟動標記已讀之前）
+    backfill_since_date(monitor)
+    # 2. 執行單筆手動補發
     check_forced_reports(monitor)
+    # 3. 標記其餘更早的舊紀錄為已讀
     init_cold_start(monitor)
 
     while True:
@@ -396,5 +464,7 @@ def main():
         time.sleep(CHECK_INTERVAL_SECONDS)
 
 
+if __name__ == "__main__":
+    main()
 if __name__ == "__main__":
     main()
